@@ -37,6 +37,8 @@ namespace Microsoft.AspNetCore.SignalR
 
     public class HubEndPoint<THub, TClient> : IInvocationBinder where THub : Hub<TClient>
     {
+        private static readonly Type[] _excludeInterfaces = new[] { typeof(Hub<>), typeof(IDisposable) };
+
         private readonly Dictionary<string, HubMethodDescriptor> _methods = new Dictionary<string, HubMethodDescriptor>(StringComparer.OrdinalIgnoreCase);
 
         private readonly HubLifetimeManager<THub> _lifetimeManager;
@@ -389,7 +391,10 @@ namespace Microsoft.AspNetCore.SignalR
         private void DiscoverHubMethods()
         {
             var hubType = typeof(THub);
-            foreach (var methodInfo in hubType.GetMethods().Where(m => IsHubMethod(m)))
+
+            var allInterfaceMethods = _excludeInterfaces.SelectMany(i => GetInterfaceMethods(hubType, i));
+            foreach (var methodInfo in hubType.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .Except(allInterfaceMethods).Where(m => IsHubMethod(m)))
             {
                 var methodName = methodInfo.Name;
 
@@ -410,13 +415,13 @@ namespace Microsoft.AspNetCore.SignalR
 
         private static bool IsHubMethod(MethodInfo methodInfo)
         {
-            // TODO: Add more checks
-            if (!methodInfo.IsPublic || methodInfo.IsSpecialName)
+            var baseDefinition = methodInfo.GetBaseDefinition().DeclaringType;
+            if (typeof(object) == baseDefinition || methodInfo.IsSpecialName)
             {
                 return false;
             }
 
-            var baseDefinition = methodInfo.GetBaseDefinition().DeclaringType;
+            // removes methods such as Hub<TClient>.OnConnectedAsync
             var baseType = baseDefinition.GetTypeInfo().IsGenericType ? baseDefinition.GetGenericTypeDefinition() : baseDefinition;
             if (typeof(Hub<>) == baseType)
             {
@@ -424,6 +429,16 @@ namespace Microsoft.AspNetCore.SignalR
             }
 
             return true;
+        }
+
+        private static IEnumerable<MethodInfo> GetInterfaceMethods(Type type, Type iface)
+        {
+            if (!iface.IsAssignableFrom(type))
+            {
+                return Enumerable.Empty<MethodInfo>();
+            }
+
+            return type.GetInterfaceMap(iface).TargetMethods;
         }
 
         Type IInvocationBinder.GetReturnType(string invocationId)
